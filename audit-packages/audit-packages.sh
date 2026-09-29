@@ -33,6 +33,10 @@ with a dot, e.g. .git, .next, .gradle, .build, .expo, .cache). A package whose
 own directory happens to be named one of these (e.g. packages/build) is
 skipped too — rename it or audit that path directly if that's an issue.
 
+Packages with a lockfile but no installed dependencies (missing node_modules
+or vendor) are skipped and listed separately so you can install them and
+rerun the tool.
+
 Exits 0 if nothing was flagged at --level, 1 if any package was flagged, 2 on
 usage error.
 
@@ -265,6 +269,11 @@ if [ "$use_npm" -eq 1 ]; then
       continue
     fi
 
+    if [ ! -d "$dir/node_modules" ]; then
+      skipped_lines+=("[npm] $dir: no node_modules (run 'npm install'/npm clean-install in $dir, then rerun)")
+      continue
+    fi
+
     audit_json=$(npm audit --json --prefix "$dir" 2>/dev/null)
 
     counts=$(printf '%s' "$audit_json" | node -e '
@@ -298,6 +307,11 @@ if [ "$use_composer" -eq 1 ]; then
 
     if [ ! -f "$dir/composer.lock" ]; then
       skipped_lines+=("[composer] $dir: no composer.lock")
+      continue
+    fi
+
+    if [ ! -d "$dir/vendor" ]; then
+      skipped_lines+=("[composer] $dir: no vendor directory (run 'composer install' in $dir, then rerun)")
       continue
     fi
 
@@ -349,7 +363,7 @@ fi
 
 if [ "${#skipped_lines[@]}" -gt 0 ]; then
   echo
-  echo "${c_yellow}Skipped (no lockfile):${c_reset}"
+  echo "${c_yellow}Skipped:${c_reset}"
   printf '  %s\n' "${skipped_lines[@]}"
 fi
 
