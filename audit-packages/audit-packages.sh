@@ -270,7 +270,7 @@ if [ "$use_npm" -eq 1 ]; then
     fi
 
     if [ ! -d "$dir/node_modules" ]; then
-      skipped_lines+=("[npm] $dir: no node_modules (run 'npm install'/npm clean-install in $dir, then rerun)")
+      skipped_lines+=("[npm] $dir: (node_modules not found)")
       continue
     fi
 
@@ -306,12 +306,12 @@ if [ "$use_composer" -eq 1 ]; then
     scanned_count=$((scanned_count + 1))
 
     if [ ! -f "$dir/composer.lock" ]; then
-      skipped_lines+=("[composer] $dir: no composer.lock")
+      skipped_lines+=("[composer] $dir: (composer.lock not found)")
       continue
     fi
 
     if [ ! -d "$dir/vendor" ]; then
-      skipped_lines+=("[composer] $dir: no vendor directory (run 'composer install' in $dir, then rerun)")
+      skipped_lines+=("[composer] $dir: (vendor directory not found)")
       continue
     fi
 
