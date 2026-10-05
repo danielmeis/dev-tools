@@ -33,9 +33,10 @@ with a dot, e.g. .git, .next, .gradle, .build, .expo, .cache). A package whose
 own directory happens to be named one of these (e.g. packages/build) is
 skipped too — rename it or audit that path directly if that's an issue.
 
-Packages with a lockfile but no installed dependencies (missing node_modules
-or vendor) are skipped and listed separately so you can install them and
-rerun the tool.
+Audits require package.json and package-lock.json for npm, or composer.json
+and composer.lock for Composer. Packages without a lockfile are skipped and
+listed separately. Installed dependencies (node_modules or vendor) are not
+required; audits use the lockfile.
 
 Exits 0 if nothing was flagged at --level, 1 if any package was flagged, 2 on
 usage error.
@@ -269,12 +270,7 @@ if [ "$use_npm" -eq 1 ]; then
       continue
     fi
 
-    if [ ! -d "$dir/node_modules" ]; then
-      skipped_lines+=("[npm] $dir: (node_modules not found)")
-      continue
-    fi
-
-    audit_json=$(npm audit --json --prefix "$dir" 2>/dev/null)
+    audit_json=$(npm audit --json --package-lock-only --prefix "$dir" 2>/dev/null)
 
     counts=$(printf '%s' "$audit_json" | node -e '
       let raw = "";
@@ -307,11 +303,6 @@ if [ "$use_composer" -eq 1 ]; then
 
     if [ ! -f "$dir/composer.lock" ]; then
       skipped_lines+=("[composer] $dir: (composer.lock not found)")
-      continue
-    fi
-
-    if [ ! -d "$dir/vendor" ]; then
-      skipped_lines+=("[composer] $dir: (vendor directory not found)")
       continue
     fi
 

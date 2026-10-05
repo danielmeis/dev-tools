@@ -9,6 +9,11 @@ vulnerability audit on each one, with a short pass/fail summary.
 - `npm` and/or `composer` on `PATH`, depending on which `--audit` types you use
 - Network access (audits query the npm/Packagist advisory databases)
 
+Each npm package needs `package.json` and `package-lock.json`; each Composer
+package needs `composer.json` and `composer.lock`. Packages missing a lockfile
+are skipped and reported separately. Audits use the lockfile, so installed
+dependencies (`node_modules` or `vendor`) are not required.
+
 ## Usage
 _defaults to `npm` audit type and `low` severity and above (i.e. any real vulnerability, excluding `info`)_
 
