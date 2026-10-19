@@ -221,6 +221,15 @@ process_result() {
     return
   fi
 
+  if [ "$critical" -gt 0 ]; then
+    total_critical=$((total_critical + critical))
+    pkgs_critical=$((pkgs_critical + 1))
+  fi
+  if [ "$level_rank" -le 3 ] && [ "$high" -gt 0 ]; then
+    total_high=$((total_high + high))
+    pkgs_high=$((pkgs_high + 1))
+  fi
+
   local worst="info"
   [ "$low" -gt 0 ] && worst="low"
   [ "$moderate" -gt 0 ] && worst="moderate"
@@ -258,6 +267,10 @@ skipped_lines=()
 error_lines=()
 clean_lines=()
 scanned_count=0
+total_critical=0
+total_high=0
+pkgs_critical=0
+pkgs_high=0
 
 if [ "$use_npm" -eq 1 ]; then
   while IFS= read -r file; do
@@ -376,6 +389,18 @@ echo
 flagged_color="$c_green"
 [ "${#flagged_lines[@]}" -gt 0 ] && flagged_color="$c_bold_red"
 echo "Scanned $scanned_count package(s): ${flagged_color}${#flagged_lines[@]} flagged${c_reset}, ${c_green}${#clean_lines[@]} clean${c_reset}, ${#skipped_lines[@]} skipped, ${#error_lines[@]} errors."
+
+if [ $((total_critical + total_high)) -gt 0 ]; then
+  echo
+  echo "${c_bold}📊 High/Critical totals across ${#flagged_lines[@]} flagged package(s):${c_reset}"
+  if [ "$total_critical" -gt 0 ]; then
+    printf '  %s %s%-9s %6d%s  (in %d package(s))\n' "$(emoji_for_severity critical)" "$(color_for_severity critical)" "Critical" "$total_critical" "$c_reset" "$pkgs_critical"
+  fi
+  if [ "$total_high" -gt 0 ]; then
+    printf '  %s %s%-9s %6d%s  (in %d package(s))\n' "$(emoji_for_severity high)" "$(color_for_severity high)" "High" "$total_high" "$c_reset" "$pkgs_high"
+  fi
+  printf '  🧮 %-9s %6d\n' "Combined" "$((total_critical + total_high))"
+fi
 
 [ "${#flagged_lines[@]}" -gt 0 ] && exit 1
 exit 0
