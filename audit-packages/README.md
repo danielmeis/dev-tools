@@ -19,7 +19,7 @@ dependencies (`node_modules` or `vendor`) are not required.
 _defaults to `npm` audit type and `low` severity and above (i.e. any real vulnerability, excluding `info`)_
 
 ```sh
-./audit-packages.sh <path> [--level=<info|low|moderate|high|critical>] [--audit=TYPE[,TYPE...]] [--epss[=THRESHOLD]] [--epss-all] [--no-epss]
+./audit-packages.sh <path> [--level=<info|low|moderate|high|critical>] [--audit=TYPE[,TYPE...]] [--epss[=THRESHOLD]] [--epss-all] [--no-epss] [--no-git-check] [--check-remote] [--require-default-branch] [--yes] [--timeout=SECONDS]
 ```
 
 ### Examples
@@ -33,6 +33,7 @@ _defaults to `npm` audit type and `low` severity and above (i.e. any real vulner
 ./audit-packages.sh ../../my-project --epss=0.05
 ./audit-packages.sh ../../my-project --epss-all
 ./audit-packages.sh ../../my-project --no-epss
+./audit-packages.sh ../../my-project --check-remote
 ```
 
 ### Options
@@ -45,8 +46,41 @@ _defaults to `npm` audit type and `low` severity and above (i.e. any real vulner
 - `--epss-all` — list every matching EPSS advisory and all its paths instead of
   the top 10 (5 paths each)
 - `--no-epss` — skip the EPSS lookup (no network calls beyond the audits)
+- `--no-git-check` — skip the read-only repo state check (see below)
+- `--check-remote` — in the repo check, ask each remote for its current
+  default-branch commit (`git ls-remote`, read-only, needs network) instead of
+  trusting local remote refs
+- `--require-default-branch` — exit `3` if any repo needs attention (only when
+  no vulnerabilities were flagged)
+- `-y`, `--yes` — don't ask to continue when repos need attention
+- `--timeout=SECS` — give up on a single `npm audit`/`composer audit` after `SECS`
+  seconds and list it under errors (default `90`, `0` = no limit)
+
+In a terminal, a `[####------] 5/14` counter tracks the repo check and the
+audits. If one command runs longer than 3s, the line shows how long it has
+been waiting and when it will give up, so a stall is visible. Non-terminal runs
+get plain `Auditing (...)` log lines instead.
 - `--no-color` — disable colors (also respects `NO_COLOR`); emoji are still printed
 - `-h`, `--help` — show help
+
+## Repo state check
+
+Before auditing, each git repo containing a scanned manifest is checked
+**read-only** (no checkout, fetch, or index refresh) and reported if it is:
+
+- on a branch other than the default (from `origin/HEAD`, falling back to
+  `origin/main`/`origin/master`) or on a detached HEAD
+- behind or ahead of the default branch
+- carrying uncommitted changes to tracked files (manifests/lockfiles are called out)
+
+By default, behind/ahead uses local remote refs, which are only as fresh as the
+last fetch; repos not fetched in over a day are counted so a stale result isn't
+mistaken for "in sync". `--check-remote` asks the remote directly via
+`git ls-remote` for an up-to-date answer, still without touching the repo.
+
+If any repo needs attention and stdin is a terminal, you are asked
+`Continue with the audit anyway? [y/N]`; declining exits `3` before any audit
+runs. Piped/CI runs are never prompted, and `--yes` skips the prompt.
 
 ## Summary sections
 
@@ -75,3 +109,5 @@ This is a manual, report-only tool — it never installs or modifies anything.
 - `0` — no packages flagged at the given `--level`
 - `1` — at least one package was flagged
 - `2` — usage error
+- `3` — declined the repo-state prompt, or `--require-default-branch` is set,
+  a repo needs attention, and no vulnerabilities were flagged
