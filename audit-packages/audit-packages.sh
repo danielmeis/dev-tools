@@ -21,8 +21,21 @@
 # on which --audit types are selected. Network access is required since both
 # `npm audit` and `composer audit` query their respective advisory databases.
 # Manual/report-only tool — it does not install dependencies or modify anything.
+# Keep the lib/ directory (node helpers) next to this script.
 
 set -uo pipefail
+
+# Resolve lib/ next to this script, following symlinks.
+script_path="${BASH_SOURCE[0]}"
+while [ -L "$script_path" ]; do
+  link_dir=$(cd "$(dirname "$script_path")" && pwd)
+  script_path=$(readlink "$script_path")
+  case "$script_path" in
+    /*) ;;
+    *) script_path="$link_dir/$script_path" ;;
+  esac
+done
+lib_dir="$(cd "$(dirname "$script_path")" && pwd)/lib"
 
 usage() {
   cat <<'EOF'
@@ -265,6 +278,13 @@ if ! command -v node >/dev/null 2>&1; then
   echo "node could not be found, you must install it first!" >&2
   exit 1
 fi
+
+for lib_file in npm-audit.js composer-audit.js epss.js; do
+  if [ ! -f "$lib_dir/$lib_file" ]; then
+    echo "Missing $lib_dir/$lib_file; keep the lib/ directory next to audit-packages.sh." >&2
+    exit 1
+  fi
+done
 
 if [ "$use_epss" -eq 1 ] && ! node -e 'process.exit(typeof fetch === "function" ? 0 : 1)' 2>/dev/null; then
   echo "--epss requires node 18+ (global fetch)." >&2
@@ -643,41 +663,7 @@ if [ "$use_npm" -eq 1 ]; then
     fi
 
     # Line 1: counts. Remaining lines: "severity|package|GHSA-id|cve|scope" per high/critical advisory.
-    audit_out=$(printf '%s' "$audit_json" | node -e '
-      const fs = require("fs");
-      const path = require("path");
-      let raw = "";
-      process.stdin.on("data", (chunk) => { raw += chunk; });
-      process.stdin.on("end", () => {
-        const data = JSON.parse(raw);
-        const v = data.metadata && data.metadata.vulnerabilities;
-        if (!v) {
-          throw new Error("no vulnerability metadata in npm audit output");
-        }
-        let lockPkgs = {};
-        try {
-          lockPkgs = JSON.parse(fs.readFileSync(path.join(process.argv[1], "package-lock.json"), "utf8")).packages || {};
-        } catch (e) { /* lockfile v1 or unreadable: treat everything as prod */ }
-        const scopeOf = (name) => {
-          const nodes = ((data.vulnerabilities || {})[name] || {}).nodes || [];
-          return nodes.length > 0 && nodes.every((n) => lockPkgs[n] && lockPkgs[n].dev === true) ? "dev" : "prod";
-        };
-        const pick = (key) => v[key] || 0;
-        const out = [[pick("info"), pick("low"), pick("moderate"), pick("high"), pick("critical"), pick("total")].join("|")];
-        const seen = new Set();
-        for (const [name, vuln] of Object.entries(data.vulnerabilities || {})) {
-          for (const via of vuln.via || []) {
-            if (typeof via !== "object" || (via.severity !== "high" && via.severity !== "critical")) continue;
-            const m = /GHSA-[\w-]+/.exec(via.url || "");
-            const id = m ? m[0] : String(via.source);
-            if (seen.has(id)) continue;
-            seen.add(id);
-            out.push([via.severity, via.name || name, id, "", scopeOf(via.name || name)].join("|"));
-          }
-        }
-        console.log(out.join("\n"));
-      });
-    ' "$dir" 2>/dev/null)
+    audit_out=$(printf '%s' "$audit_json" | node "$lib_dir/npm-audit.js" "$dir" 2>/dev/null)
 
     counts="${audit_out%%$'\n'*}"
     advisories=""
@@ -710,48 +696,7 @@ if [ "$use_composer" -eq 1 ]; then
     fi
 
     # Line 1: counts. Remaining lines: "severity|package|id|cve|scope" per high/critical advisory.
-    audit_out=$(printf '%s' "$audit_json" | node -e '
-      const fs = require("fs");
-      const path = require("path");
-      let raw = "";
-      process.stdin.on("data", (chunk) => { raw += chunk; });
-      process.stdin.on("end", () => {
-        const data = JSON.parse(raw);
-        const advisories = data.advisories;
-        if (!advisories) {
-          throw new Error("no advisories field in composer audit output");
-        }
-        const prodNames = new Set();
-        const devNames = new Set();
-        try {
-          const lock = JSON.parse(fs.readFileSync(path.join(process.argv[1], "composer.lock"), "utf8"));
-          (lock.packages || []).forEach((p) => prodNames.add(String(p.name).toLowerCase()));
-          (lock["packages-dev"] || []).forEach((p) => devNames.add(String(p.name).toLowerCase()));
-        } catch (e) { /* unreadable lock: treat everything as prod */ }
-        const scopeOf = (name) => {
-          const n = String(name).toLowerCase();
-          return devNames.has(n) && !prodNames.has(n) ? "dev" : "prod";
-        };
-        const counts = { info: 0, low: 0, moderate: 0, high: 0, critical: 0 };
-        const rows = [];
-        let total = 0;
-        for (const pkg in advisories) {
-          for (const advisory of advisories[pkg]) {
-            total++;
-            let sev = String(advisory.severity || "low").toLowerCase();
-            if (sev === "medium") sev = "moderate";
-            if (!(sev in counts)) sev = "low";
-            counts[sev]++;
-            if (sev === "high" || sev === "critical") {
-              const ghsa = (advisory.sources || []).map((s) => s.remoteId).find((r) => /^GHSA-/.test(r || ""));
-              const id = ghsa || advisory.cve || advisory.advisoryId || "unknown";
-              rows.push([sev, advisory.packageName || pkg, id, advisory.cve || "", scopeOf(advisory.packageName || pkg)].join("|"));
-            }
-          }
-        }
-        console.log([[counts.info, counts.low, counts.moderate, counts.high, counts.critical, total].join("|"), ...rows].join("\n"));
-      });
-    ' "$dir" 2>/dev/null)
+    audit_out=$(printf '%s' "$audit_json" | node "$lib_dir/composer-audit.js" "$dir" 2>/dev/null)
 
     counts="${audit_out%%$'\n'*}"
     advisories=""
@@ -821,62 +766,7 @@ fi
 if [ "$use_epss" -eq 1 ] && [ "${#epss_advisories[@]}" -gt 0 ]; then
   echo "Looking up EPSS scores for ${#epss_advisories[@]} advisory row(s)..." >&2
   # Output: "unique|scored|matched|failed|prodMatched|devMatched" header, then "epss%|severity|package|id|cve|scope|dir,dir,..." per match, highest first within each scope. Dirs are separated by \x1f.
-  epss_out=$(printf '%s\n' "${epss_advisories[@]}" | node -e '
-    const threshold = parseFloat(process.argv[1]);
-    let raw = "";
-    process.stdin.on("data", (chunk) => { raw += chunk; });
-    process.stdin.on("end", async () => {
-      const byId = new Map();
-      for (const line of raw.split("\n")) {
-        if (!line) continue;
-        const [sev, pkg, id, cve, scope, ...dirParts] = line.split("|");
-        const dir = dirParts.join("|");
-        if (!byId.has(id)) byId.set(id, { sev, pkg, id, cve, scope, dirs: new Set() });
-        const entry = byId.get(id);
-        if (scope === "prod") entry.scope = "prod";
-        entry.dirs.add(dir);
-      }
-      const items = [...byId.values()];
-      for (const it of items) {
-        if (it.cve && !/^CVE-\d{4}-\d{4,}$/.test(it.cve)) it.cve = "";
-      }
-      const getJson = async (url) => {
-        const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
-        if (!res.ok) throw new Error(String(res.status));
-        return res.json();
-      };
-
-      const needCve = items.filter((i) => !i.cve && /^GHSA-/.test(i.id));
-      for (let i = 0; i < needCve.length; i += 10) {
-        await Promise.all(needCve.slice(i, i + 10).map(async (it) => {
-          try {
-            const v = await getJson("https://api.osv.dev/v1/vulns/" + encodeURIComponent(it.id));
-            const alias = (v.aliases || []).find((a) => /^CVE-\d{4}-\d{4,}$/.test(a));
-            if (alias) it.cve = alias;
-          } catch (e) { /* unresolved advisories are reported as unscored */ }
-        }));
-      }
-
-      const cves = [...new Set(items.map((i) => i.cve).filter(Boolean))];
-      const scores = new Map();
-      let failed = 0;
-      for (let i = 0; i < cves.length; i += 50) {
-        try {
-          const d = await getJson("https://api.first.org/data/v1/epss?cve=" + cves.slice(i, i + 50).join(","));
-          for (const r of d.data || []) scores.set(r.cve, parseFloat(r.epss));
-        } catch (e) { failed = 1; }
-      }
-
-      const scored = items.filter((i) => scores.has(i.cve));
-      const matched = scored.filter((i) => scores.get(i.cve) >= threshold)
-        .sort((a, b) => ((a.scope === "dev") - (b.scope === "dev")) || (scores.get(b.cve) - scores.get(a.cve)));
-      const devMatched = matched.filter((i) => i.scope === "dev").length;
-      console.log([items.length, scored.length, matched.length, failed, matched.length - devMatched, devMatched].join("|"));
-      for (const i of matched) {
-        console.log([(scores.get(i.cve) * 100).toFixed(1), i.sev, i.pkg, i.id, i.cve, i.scope === "dev" ? "dev-only" : "prod", [...i.dirs].sort().join("\x1f")].join("|"));
-      }
-    });
-  ' "$epss_threshold" 2>/dev/null)
+  epss_out=$(printf '%s\n' "${epss_advisories[@]}" | node "$lib_dir/epss.js" "$epss_threshold" 2>/dev/null)
 
   echo
   if [ -z "$epss_out" ]; then

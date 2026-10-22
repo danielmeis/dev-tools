@@ -3,6 +3,17 @@
 Recursively finds every npm/composer package under a directory path and runs a
 vulnerability audit on each one, with a short pass/fail summary.
 
+## Layout
+
+```
+audit-packages.sh        orchestration, repo check, progress, output
+lib/npm-audit.js         parses npm audit JSON + package-lock.json scope
+lib/composer-audit.js    parses composer audit JSON + composer.lock scope
+lib/epss.js              OSV.dev / FIRST.org lookup and ranking
+```
+
+Keep `lib/` next to the script (symlinks to the script are fine).
+
 ## Requirements
 
 - `bash`, `node` 18+ on `PATH`
