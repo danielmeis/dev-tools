@@ -3,26 +3,22 @@
 # node_modules, vendor, build output, and native build/dependency dirs) and
 # reports vulnerability audit results per package.
 #
-# Usage:
-#   ./audit-packages.sh <path> [--level=<info|low|moderate|high|critical>] [--audit=TYPE[,TYPE...]] [--epss[=THRESHOLD]] [--epss-all] [--no-epss] [--no-git-check] [--check-remote] [--require-default-branch] [--yes] [--timeout=SECONDS]
+# Usage: ./audit-packages.sh <path> [options]   (run with --help for every option)
 #
 # Examples:
 #   ./audit-packages.sh ../../my-project
 #   ./audit-packages.sh ../../my-project/wp-content/plugins/my-plugin
 #   ./audit-packages.sh ../../my-project --level=high
-#   ./audit-packages.sh ../../my-project --audit=composer
 #   ./audit-packages.sh ../../my-project --audit=npm,composer
-#   ./audit-packages.sh ../../my-project --epss=0.05
-#   ./audit-packages.sh ../../my-project --epss-all
-#   ./audit-packages.sh ../../my-project --no-epss
-#   ./audit-packages.sh ../../my-project --check-remote
+#   ./audit-packages.sh ../../my-project --epss=0.05 --check-remote
 #
-# Requirements: bash, node 18+ on PATH always; npm and/or composer on PATH depending
-# on which --audit types are selected. Network access is required since both
-# `npm audit` and `composer audit` query their respective advisory databases.
-# Manual/report-only tool — it does not install dependencies or modify anything.
+# Requirements: bash and node 18+ on PATH; npm and/or composer depending on --audit; git
+# for the repo check (skipped if missing). Network access is required: the audits query the
+# npm/Packagist advisory databases, and EPSS queries OSV.dev and FIRST.org (see --no-epss).
+# Manual/report-only tool: it does not install dependencies or modify anything.
 # Keep the lib/ directory (node helpers) next to this script.
 
+# No -e on purpose: many checks are written as `[ ... ] && ...` and a failing test must not abort.
 set -uo pipefail
 
 # Resolve lib/ next to this script, following symlinks.
@@ -36,6 +32,17 @@ while [ -L "$script_path" ]; do
   esac
 done
 lib_dir="$(cd "$(dirname "$script_path")" && pwd)/lib"
+
+# Stop any in-flight audit and clear the progress line on exit or interrupt.
+# shellcheck disable=SC2329 # invoked through the traps below
+cleanup() {
+  pkill -P $$ 2>/dev/null
+  [ -t 2 ] && printf '\r\033[2K' >&2
+  return 0
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 usage() {
   cat <<'EOF'
@@ -57,8 +64,8 @@ required; audits use the lockfile.
 
 Exits 0 if nothing was flagged at --level, 1 if any package was flagged, 2 on
 usage error, 3 if you decline the repo-state prompt or --require-default-branch
-is set and a repo needs attention (the latter only when no vulnerabilities were
-flagged).
+is set and a repo needs attention, 4 if an audit failed or timed out. Codes 3
+and 4 apply only when no vulnerabilities were flagged (1 wins).
 
 Before auditing, every git repo containing a scanned manifest is checked
 read-only: current branch vs. the default branch, uncommitted changes, and
@@ -66,7 +73,7 @@ ahead/behind counts. Nothing is checked out, fetched, or modified. If any repo
 needs attention and stdin is a terminal, you are asked whether to continue.
 
 Options:
-  --level=LEVEL   Only flag packages with vulnerabilities at or above this
+  --level=LEVEL    Only flag packages with vulnerabilities at or above this
                    severity (default: low, i.e. any vulnerability).
   --audit=TYPE     Which audit(s) to run: npm, composer. Comma- or space-separated
                    for more than one, e.g. --audit=npm,composer or
@@ -320,9 +327,10 @@ find_manifests() {
     \) \) -prune -o -type f -name "$manifest_name" -print | sort
 }
 
-# Read-only git access; GIT_OPTIONAL_LOCKS=0 stops `git status` from refreshing the index.
+# Read-only git access. GIT_OPTIONAL_LOCKS=0 stops `git status` from refreshing the index, and
+# core.fsmonitor=false keeps a repo or global fsmonitor setting from starting a daemon or program.
 git_ro() {
-  GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 git -C "$repo_root" "$@" </dev/null
+  GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 git -c core.fsmonitor=false -C "$repo_root" "$@" </dev/null
 }
 
 file_mtime() {
@@ -377,6 +385,8 @@ run_limited() {
   shift
   "$@" 2>/dev/null &
   pid=$!
+  # Background jobs ignore Ctrl-C, so stop the command ourselves when this subshell is signalled.
+  trap 'kill "$pid" 2>/dev/null; exit 130' INT TERM
   while kill -0 "$pid" 2>/dev/null; do
     elapsed=$((SECONDS - start))
     if [ "$limit" -gt 0 ] && [ "$elapsed" -ge "$limit" ]; then
@@ -421,7 +431,7 @@ audit_progress() {
 check_repo() {
   repo_root="$1"
   local count="$2"
-  local branch default_ref="" default_name="" cand compare="" remote_sha="" local_sha
+  local branch default_ref="" default_name="" cand compare="" remote_sha="" local_sha ssh_cmd
   local ahead="" behind="" fetch_file mtime age st dirty issues="" stale=0
 
   branch=$(git_ro symbolic-ref --quiet --short HEAD 2>/dev/null)
@@ -449,7 +459,15 @@ check_repo() {
   if [ -n "$default_ref" ]; then
     compare="refs/remotes/$default_ref"
     if [ "$check_remote" -eq 1 ]; then
-      remote_sha=$(run_limited "$remote_timeout" git_ro ls-remote origin "refs/heads/$default_name" | cut -f1)
+      # ssh would otherwise prompt on /dev/tty for passphrases and host keys; fail fast instead.
+      ssh_cmd="${GIT_SSH_COMMAND:-}"
+      if [ -z "$ssh_cmd" ] && [ -z "$(git_ro config --get core.sshCommand 2>/dev/null)" ]; then
+        ssh_cmd="ssh -o BatchMode=yes"
+      fi
+      remote_sha=$(
+        [ -n "$ssh_cmd" ] && export GIT_SSH_COMMAND="$ssh_cmd"
+        run_limited "$remote_timeout" git_ro ls-remote origin "refs/heads/$default_name" | cut -f1
+      )
       if [ -n "$remote_sha" ]; then
         local_sha=$(git_ro rev-parse "$compare" 2>/dev/null)
         if [ "$remote_sha" != "$local_sha" ]; then
@@ -752,20 +770,21 @@ echo "Scanned $scanned_count package(s): ${flagged_color}${#flagged_lines[@]} fl
 
 if [ $((total_critical + total_high)) -gt 0 ]; then
   echo
-  echo "${c_bold}📊 High/Critical totals across ${#flagged_lines[@]} flagged package(s):${c_reset}"
+  echo "${c_bold}  High/Critical totals across ${#flagged_lines[@]} flagged package(s):${c_reset}"
   if [ "$total_critical" -gt 0 ]; then
     printf '  %s %s%-9s %6d%s  (in %d package(s))\n' "$(emoji_for_severity critical)" "$(color_for_severity critical)" "Critical" "$total_critical" "$c_reset" "$pkgs_critical"
   fi
   if [ "$total_high" -gt 0 ]; then
     printf '  %s %s%-9s %6d%s  (in %d package(s))\n' "$(emoji_for_severity high)" "$(color_for_severity high)" "High" "$total_high" "$c_reset" "$pkgs_high"
   fi
-  printf '  🧮 %-9s %6d\n' "Combined" "$((total_critical + total_high))"
+  printf '     %-9s %6d\n' "Combined" "$((total_critical + total_high))"
   [ "$use_epss" -eq 1 ] && echo "  ${c_dim}Counts are vulnerable packages per audit; the EPSS section below counts unique advisories.${c_reset}"
 fi
 
 if [ "$use_epss" -eq 1 ] && [ "${#epss_advisories[@]}" -gt 0 ]; then
   echo "Looking up EPSS scores for ${#epss_advisories[@]} advisory row(s)..." >&2
-  # Output: "unique|scored|matched|failed|prodMatched|devMatched" header, then "epss%|severity|package|id|cve|scope|dir,dir,..." per match, highest first within each scope. Dirs are separated by \x1f.
+  # Output: "unique|scored|matched|failed|prodMatched|devMatched" header, then one
+  # "epss%|severity|package|id|cve|scope|dir\x1fdir..." row per match (prod first, highest first).
   epss_out=$(printf '%s\n' "${epss_advisories[@]}" | node "$lib_dir/epss.js" "$epss_threshold" 2>/dev/null)
 
   echo
@@ -807,5 +826,6 @@ if [ "$use_epss" -eq 1 ] && [ "${#epss_advisories[@]}" -gt 0 ]; then
 fi
 
 [ "${#flagged_lines[@]}" -gt 0 ] && exit 1
+[ "${#error_lines[@]}" -gt 0 ] && exit 4
 [ "$require_default" -eq 1 ] && [ "$repo_attention" -gt 0 ] && exit 3
 exit 0

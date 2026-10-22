@@ -62,17 +62,18 @@ _defaults to `npm` audit type and `low` severity and above (i.e. any real vulner
   default-branch commit (`git ls-remote`, read-only, needs network) instead of
   trusting local remote refs
 - `--require-default-branch` — exit `3` if any repo needs attention (only when
-  no vulnerabilities were flagged)
+  no vulnerabilities were flagged and no audit failed)
 - `-y`, `--yes` — don't ask to continue when repos need attention
 - `--timeout=SECS` — give up on a single `npm audit`/`composer audit` after `SECS`
   seconds and list it under errors (default `90`, `0` = no limit)
+- `--no-color` — disable colors (also respects `NO_COLOR`); emoji are still printed
+- `-h`, `--help` — show help
 
 In a terminal, a `[####------] 5/14` counter tracks the repo check and the
 audits. If one command runs longer than 3s, the line shows how long it has
 been waiting and when it will give up, so a stall is visible. Non-terminal runs
-get plain `Auditing (...)` log lines instead.
-- `--no-color` — disable colors (also respects `NO_COLOR`); emoji are still printed
-- `-h`, `--help` — show help
+get plain `Auditing (...)` log lines instead. Ctrl-C (or `kill`) stops any audit
+that is still running.
 
 ## Repo state check
 
@@ -87,7 +88,16 @@ Before auditing, each git repo containing a scanned manifest is checked
 By default, behind/ahead uses local remote refs, which are only as fresh as the
 last fetch; repos not fetched in over a day are counted so a stale result isn't
 mistaken for "in sync". `--check-remote` asks the remote directly via
-`git ls-remote` for an up-to-date answer, still without touching the repo.
+`git ls-remote` for an up-to-date answer, still without touching the repo. Over
+ssh it fails fast instead of prompting for a passphrase or host key (unless you
+set `GIT_SSH_COMMAND` or `core.sshCommand` yourself).
+
+Git runs with `core.fsmonitor=false`, optional locks off, and no prompts, so a
+repo or global fsmonitor setting can't start a daemon or write into the repo.
+
+Limitations: the default branch is read from the `origin` remote only (without
+it, `main` or `master` is accepted and anything else is reported as "default
+branch unknown").
 
 If any repo needs attention and stdin is a terminal, you are asked
 `Continue with the audit anyway? [y/N]`; declining exits `3` before any audit
@@ -122,3 +132,5 @@ This is a manual, report-only tool — it never installs or modifies anything.
 - `2` — usage error
 - `3` — declined the repo-state prompt, or `--require-default-branch` is set,
   a repo needs attention, and no vulnerabilities were flagged
+- `4` — an audit failed or timed out and no vulnerabilities were flagged (`1`
+  takes precedence)

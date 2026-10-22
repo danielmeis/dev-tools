@@ -1,12 +1,21 @@
 # dev-tools
 
-A collection of small, generic, standalone dev tools. Each tool lives in its own
-folder with no dependencies on the others.
+A collection of small, generic dev tools. Each tool lives in its own
+self-contained folder (copy the whole folder) with no dependencies on the others.
 
 ## Tools
 
 - [audit-packages](audit-packages/README.md) — recursively scans a directory
-  for npm/composer packages and reports known vulnerabilities per package.
+  for npm/composer packages and reports known vulnerabilities per package,
+  ranked by exploit likelihood (EPSS), plus a read-only check of each repo's
+  branch state.
+
+## Requirements
+
+Tool-specific requirements are in each tool's README. For `audit-packages`:
+`bash` and `node` 18+, plus `npm` and/or `composer` (and optionally `git`).
+It needs network access, including requests to OSV.dev and FIRST.org for EPSS
+scores unless run with `--no-epss`; only public advisory IDs are sent.
 
 ## Usage
 
