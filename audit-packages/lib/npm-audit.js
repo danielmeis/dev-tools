@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 "use strict";
 
 // Reads `npm audit --json` from stdin; argv[2] is the package directory holding package-lock.json.

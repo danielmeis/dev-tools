@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 "use strict";
 
 // Reads `composer audit --format=json` from stdin; argv[2] is the package directory holding composer.lock.

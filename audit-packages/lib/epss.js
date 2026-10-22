@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 "use strict";
 
 // Reads "severity|package|id|cve|scope|dir" rows from stdin; argv[2] is the minimum EPSS probability (0-1).
