@@ -1,9 +1,9 @@
 "use strict";
 
-// Reads "severity|package|id|cve|scope|dir" rows from stdin; argv[2] is the minimum EPSS probability (0-1).
+// Reads "severity|package|id|cve|scope|ecosystem|dir" rows from stdin; argv[2] is the minimum EPSS probability (0-1).
 // Resolves missing CVEs from GHSA ids via OSV.dev, then fetches EPSS scores from FIRST.org.
 // Output line 1: "unique|scored|matched|failed|prodMatched|devMatched".
-// Then one "epss%|severity|package|id|cve|scope|dir\x1fdir..." row per match: prod before dev-only, highest score first.
+// Then one "epss%|severity|package|id|cve|scope|ecosystem|dir\x1fdir..." row per match: prod before dev-only, highest score first.
 
 const CVE_PATTERN = /^CVE-\d{4}-\d{4,}$/;
 const threshold = parseFloat(process.argv[2]);
@@ -20,10 +20,12 @@ process.stdin.on("end", async () => {
   const byId = new Map();
   for (const line of raw.split("\n")) {
     if (!line) continue;
-    const [sev, pkg, id, cve, scope, ...dirParts] = line.split("|");
+    const [sev, pkg, id, cve, scope, eco, ...dirParts] = line.split("|");
     const dir = dirParts.join("|");
-    if (!byId.has(id)) byId.set(id, { sev, pkg, id, cve, scope, dirs: new Set() });
-    const entry = byId.get(id);
+    // Keyed per ecosystem so the same advisory id in npm and composer stays two entries.
+    const key = `${eco}:${id}`;
+    if (!byId.has(key)) byId.set(key, { sev, pkg, id, cve, scope, eco, dirs: new Set() });
+    const entry = byId.get(key);
     if (scope === "prod") entry.scope = "prod";
     entry.dirs.add(dir);
   }
@@ -61,6 +63,6 @@ process.stdin.on("end", async () => {
   const devMatched = matched.filter((i) => i.scope === "dev").length;
   console.log([items.length, scored.length, matched.length, failed, matched.length - devMatched, devMatched].join("|"));
   for (const i of matched) {
-    console.log([(scores.get(i.cve) * 100).toFixed(1), i.sev, i.pkg, i.id, i.cve, i.scope === "dev" ? "dev-only" : "prod", [...i.dirs].sort().join("\x1f")].join("|"));
+    console.log([(scores.get(i.cve) * 100).toFixed(1), i.sev, i.pkg, i.id, i.cve, i.scope === "dev" ? "dev-only" : "prod", i.eco, [...i.dirs].sort().join("\x1f")].join("|"));
   }
 });

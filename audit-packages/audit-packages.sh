@@ -524,7 +524,8 @@ check_repo() {
 
 # Applies --level filtering/formatting to one audit result and appends it to
 # the shared flagged_lines/clean_lines arrays. $counts is "info|low|moderate|high|critical|total".
-# $advisories is optional newline-separated "severity|package|id|cve|scope" rows (high/critical only).
+# $advisories is optional newline-separated "severity|package|id|cve|scope" rows (high/critical only);
+# each is passed on to the EPSS step with the ecosystem ($label) and directory appended.
 process_result() {
   local dir="$1" label="$2" counts="$3" advisories="${4:-}"
   local adv_line
@@ -557,7 +558,7 @@ process_result() {
     while IFS= read -r adv_line; do
       [ -z "$adv_line" ] && continue
       if [ "${adv_line%%|*}" = "critical" ] || [ "$level_rank" -le 3 ]; then
-        epss_advisories+=("${adv_line}|${dir}")
+        epss_advisories+=("${adv_line}|${label}|${dir}")
       fi
     done <<< "$advisories"
   fi
@@ -784,7 +785,7 @@ fi
 if [ "$use_epss" -eq 1 ] && [ "${#epss_advisories[@]}" -gt 0 ]; then
   echo "Looking up EPSS scores for ${#epss_advisories[@]} advisory row(s)..." >&2
   # Output: "unique|scored|matched|failed|prodMatched|devMatched" header, then one
-  # "epss%|severity|package|id|cve|scope|dir\x1fdir..." row per match (prod first, highest first).
+  # "epss%|severity|package|id|cve|scope|ecosystem|dir\x1fdir..." row per match (prod first, highest first).
   epss_out=$(printf '%s\n' "${epss_advisories[@]}" | node "$lib_dir/epss.js" "$epss_threshold" 2>/dev/null)
 
   echo
@@ -799,7 +800,7 @@ if [ "$use_epss" -eq 1 ] && [ "${#epss_advisories[@]}" -gt 0 ]; then
       [ "$e_prod" -gt 0 ] && e_split="${c_bold_red}🚩 ${e_prod} prod${c_reset}, ${e_dev} dev-only"
       echo "  ${c_bold_red}${e_matched} advisories — fix these first${c_reset} (${e_split})"
       e_shown=0
-      while IFS='|' read -r e_score e_sev e_pkg e_id e_cve e_scope e_dirs; do
+      while IFS='|' read -r e_score e_sev e_pkg e_id e_cve e_scope e_eco e_dirs; do
         [ "$e_shown" -ge "$epss_limit" ] && break
         e_scope_label="$e_scope"
         e_scope_color="$c_dim"
@@ -807,7 +808,7 @@ if [ "$use_epss" -eq 1 ] && [ "${#epss_advisories[@]}" -gt 0 ]; then
           e_scope_label="🚩 PROD "
           e_scope_color="$c_bold_red"
         fi
-        printf '    %s %-8s %-30s %-16s %5s%%  %s%s%s (%s)\n' "$(emoji_for_severity "$e_sev")" "$e_sev" "$e_pkg" "$e_cve" "$e_score" "$e_scope_color" "$e_scope_label" "$c_reset" "$e_id"
+        printf '    %s %-8s %-10s %-30s %-16s %5s%%  %s%s%s (%s)\n' "$(emoji_for_severity "$e_sev")" "$e_sev" "[$e_eco]" "$e_pkg" "$e_cve" "$e_score" "$e_scope_color" "$e_scope_label" "$c_reset" "$e_id"
         IFS=$'\x1f' read -ra e_dir_list <<< "$e_dirs"
         for e_dir in "${e_dir_list[@]:0:epss_path_limit}"; do
           echo "        ↳ $e_dir"

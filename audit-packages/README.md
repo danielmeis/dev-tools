@@ -112,7 +112,8 @@ After the per-package report, the script prints:
   `composer audit`.
 - **EPSS** — unique high/critical *advisories* whose
   [EPSS](https://www.first.org/epss/) probability meets the threshold, highest
-  first, with the repo paths where each was found. Advisories are labelled
+  first, with the repo paths where each was found. Each row is prefixed with its
+  ecosystem (`[npm]` or `[composer]`) and labelled
   `🚩 PROD` (sorted first) or `dev-only`. The label comes from the lockfile
   (`dev: true` in `package-lock.json`, `packages-dev` in `composer.lock`); a
   dev-only package can still ship if CI/deploy installs dev packages or bundles
